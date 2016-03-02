@@ -17,8 +17,18 @@ public class Shoot : MonoBehaviour {
 	// Update is called once per frame
 	void Update () {
         // Gather the Z-axis values
-        var axisHZ = Input.GetAxis("Horizontal Z");
-        var axisVZ = Input.GetAxis("Vertical Z");
+        var axisHZ         = Input.GetAxis("Horizontal Z");
+        var axisVZ         = Input.GetAxis("Vertical Z");
+
+        // If keyboard is used.
+        var axisHZKeyboard = Input.GetAxis("Horizontal Z Keyboard");
+        var axisVZKeyboard = Input.GetAxis("Vertical Z Keyboard");
+        if (axisHZ == 0 && axisVZ == 0 && (axisHZKeyboard != 0 || axisVZKeyboard != 0))
+        {
+            axisHZ = axisHZKeyboard;
+            axisVZ = axisVZKeyboard;
+        }
+
         if (axisHZ != 0 || axisVZ != 0)
         {
             // Time based shoot frequency
