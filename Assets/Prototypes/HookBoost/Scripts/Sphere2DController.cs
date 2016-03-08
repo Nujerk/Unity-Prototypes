@@ -9,9 +9,9 @@ namespace HookBoost
     {
         [Range(1,20)]
         public float maxDistanceHook = 10;
-        [Range(1, 30)]
+        [Range(1, 50)]
         public float hookSpeed = 20;
-        [Range(1, 30)]
+        [Range(1, 50)]
         public float hookForce = 20;
     }
 
@@ -69,7 +69,7 @@ namespace HookBoost
                 projectile.transform.position = gameObject.transform.position;
                 projectile.SetActive(true);
                 // Use normalized vector to have a magnitude of 1 (this way even a little pressure on the joystick allow to shoot at full strength).
-                projectile.GetComponent<Rigidbody2D>().AddForce(_lastProjectileDirection.normalized * hookSettings.maxDistanceHook, ForceMode2D.Impulse);
+                projectile.GetComponent<Rigidbody2D>().AddForce(_lastProjectileDirection.normalized * hookSettings.hookSpeed, ForceMode2D.Impulse);
                 _hookLaunched = true;
                 _hookReturn = false;
             }
