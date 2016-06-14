@@ -6,6 +6,22 @@ using UnityEngine;
 
 namespace rr.level {
 
+    public enum GameObjectParsingState
+    {
+        Begin,
+        ReadingName,
+        ReadingPrefab,
+        ReadingParent,
+        InComponentList,
+        InPropertyList,
+        InModificationList,
+        ReadingComponent,
+        ReadingProperty,
+        ReadingModification,
+        ReadingComponentName,
+        End
+    }
+
     public class LevelManager : MonoBehaviour {
 
         private static Quaternion s_DefaultQuaternion = new Quaternion(0, 0, 0, 1);
@@ -35,7 +51,7 @@ namespace rr.level {
             var serialGameObjects = serializedLevel.Split(';');
             GameObject currentGO;
             foreach(var sgo in serialGameObjects) {
-                currentGO = ParseGameObject(go);
+                currentGO = ParseGameObject(sgo);
             }
         }
 
@@ -122,12 +138,12 @@ namespace rr.level {
 
             var prefab = PrefabUtility.GetPrefabParent(go) as GameObject;
             var id = prefab.GetInstanceID();
-            serialization += "go:\"" + go.name + "\"";
+            serialization += "go:" + go.name;
             serialization += ":pf:";
             serialization += id;
 
             if(go.transform.parent != null)
-                serialization += ":parent:\"" + go.transform.parent.name + "\"";
+                serialization += ":parent:" + go.transform.parent.name;
 
             var mods = PrefabUtility.GetPropertyModifications(go);
             if(mods.Length > 0) {
@@ -157,7 +173,7 @@ namespace rr.level {
                     if (serializedCount > 0)
                         serialization += ",";
 
-                    serialization += mod.propertyPath + "=\"" + mod.value + "\"";
+                    serialization += mod.propertyPath + "=" + mod.value;
                     serializedCount++;
                 }
                 serialization += "]";
@@ -263,7 +279,7 @@ namespace rr.level {
         protected string SerializeComponent(Component comp) {
             var serialization = "";
 
-            serialization += "comp:\"" + comp.GetType().Name + "\"";
+            serialization += "comp:" + comp.GetType().Name;
             var sObj = new SerializedObject(comp);
             var property = sObj.GetIterator();
             property.Next(true);
@@ -273,7 +289,7 @@ namespace rr.level {
                 if (!IsUselessProperty(property.propertyPath) && !IsDefaultValue(property)) {
                     if (propCount > 0)
                         serialization += ",";
-                    serialization += property.propertyPath + ":\"" + GetPropertyStringValue(property) + "\"";
+                    serialization += property.propertyPath + ":" + GetPropertyStringValue(property);
                     propCount++;
                 }
 
@@ -286,10 +302,147 @@ namespace rr.level {
             return serialization;
         }
 
+        protected T GetValueFromString<T>(string value)
+        {
+            T result = default(T);
+
+            return result;
+        }
+
         protected GameObject ParseGameObject(string serialized) {
             GameObject go = null;
 
+            var charCount = serialized.Length;
+            var index = 0;
+            string word = "";
+            char currentChar;
+            var componentList = new List<Component>();
+            var mods = new List<PropertyModification>();
+            bool readingValue = false;
+            string key = "";
 
+            PropertyModification mod;
+            Component comp = null;
+
+            GameObjectParsingState state = GameObjectParsingState.Begin;
+            string name = "", parent ="";
+            int prefabID = 0;
+
+            while(index < charCount)
+            {
+                currentChar = serialized.ElementAt(index);
+                switch (currentChar)
+                {
+                    case ':':
+                        switch(state) {
+                            case GameObjectParsingState.Begin:
+                                word = "";
+                                state = GameObjectParsingState.ReadingName;
+                                break;
+                            case GameObjectParsingState.ReadingName:
+                                name = word;
+                                word = "";
+                                break;
+                            case GameObjectParsingState.ReadingPrefab:
+                                prefabID = int.Parse(word);
+                                word = "";
+                                break;
+                            case GameObjectParsingState.ReadingParent:
+                                parent = word;
+                                word = "";
+                                break;
+                            case GameObjectParsingState.InComponentList:
+                                word = "";
+                                state = GameObjectParsingState.ReadingComponentName;
+                                break;
+
+                            default:
+                                if(word == "pf")
+                                    state = GameObjectParsingState.ReadingPrefab;
+                                else if(word == "parent")
+                                    state = GameObjectParsingState.ReadingParent;
+                            break;
+                        }
+                        break;
+                    case '[':
+                        if(word == "comps") 
+                            state = GameObjectParsingState.InComponentList;
+                        else if (word == "props")
+                            state = GameObjectParsingState.InPropertyList;
+                        else if (word == "mods")
+                            state = GameObjectParsingState.InModificationList;
+                        break;
+                    case ']':
+                        if (state == GameObjectParsingState.ReadingComponent || state == GameObjectParsingState.ReadingModification)
+                            state = GameObjectParsingState.End;
+                        else if (state == GameObjectParsingState.ReadingProperty)
+                            state = GameObjectParsingState.ReadingComponent;
+
+                        readingValue = false;
+                        break;
+                    case ',':
+                        if (state == GameObjectParsingState.ReadingComponent)
+                            state = GameObjectParsingState.InComponentList;
+                        else if (state == GameObjectParsingState.ReadingModification)
+                        {
+                            state = GameObjectParsingState.InModificationList;
+                            if(readingValue)
+                            {
+                                mod = new PropertyModification();
+                                mod.propertyPath = key;
+                                mod.value = word;
+                                mods.Add(mod);
+
+                                key = "";
+                                word = "";
+                            }
+                        }
+                        else if (state == GameObjectParsingState.ReadingProperty)
+                        {
+                            state = GameObjectParsingState.InPropertyList;
+                            if (readingValue)
+                            {
+                                
+                                var args = new object[] { word };
+                                var member = comp.GetType().GetMember(key);
+                                var value = GetValueFromString<>(word);
+                                comp.GetType().InvokeMember(key, System.Reflection.BindingFlags.SetField, null, comp, args);
+                            }
+                        }
+
+                        readingValue = false;
+                        break;
+                    case '=':
+                        readingValue = true;
+                        break;
+                    default:
+                        word += currentChar;
+                        break;
+                }
+
+                index++;
+            }
+            
+            if(prefabID != 0)
+            {
+                var prefab = EditorUtility.InstanceIDToObject(prefabID) as GameObject;
+                go = GameObject.Instantiate(prefab);
+
+                go.name = name;
+                PrefabUtility.SetPropertyModifications(go, mods.ToArray());
+            }
+            else
+            {
+                go = new GameObject();
+                if (parent != "")
+                    go.transform.parent = GameObject.Find(parent).transform;
+
+                foreach(var comp in componentList)
+                {
+                    var clone = go.AddComponent(comp.GetType());
+                    EditorUtility.CopySerialized(comp, clone);
+                }
+            }
 
             return go;
         }
