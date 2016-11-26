@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngineInternal;
 
 namespace rr.level {
 
-    public enum GameObjectParsingState
-    {
+    public enum GameObjectParsingState {
         Begin,
         ReadingName,
+        NonRelevant,
         ReadingPrefab,
         ReadingParent,
         InComponentList,
@@ -20,6 +21,12 @@ namespace rr.level {
         ReadingModification,
         ReadingComponentName,
         End
+    }
+
+    public struct GameObjectRef {
+        public Component target;
+        public string targetKey;
+        public string refName;
     }
 
     public class LevelManager : MonoBehaviour {
@@ -46,12 +53,24 @@ namespace rr.level {
             "",
         };
 
+        private List<GameObjectRef> gameObjRefs;
+
         public void LoadLevel() {
+            gameObjRefs = new List<GameObjectRef>();
             var serializedLevel = currentLevel.SerializedLevel;
             var serialGameObjects = serializedLevel.Split(';');
             GameObject currentGO;
             foreach(var sgo in serialGameObjects) {
                 currentGO = ParseGameObject(sgo);
+            }
+
+            foreach(var goRef in gameObjRefs) {
+                currentGO = GameObject.Find(goRef.refName);
+                                
+                if(currentGO != null) {
+                    var args = new object[] { currentGO };
+                    goRef.target.GetType().InvokeMember(goRef.targetKey, System.Reflection.BindingFlags.SetField, null, goRef.target, args);
+                }
             }
         }
 
@@ -112,10 +131,10 @@ namespace rr.level {
         protected string SerializeGameObject(GameObject go) {
             var serialization = "";
 
-            serialization += "go:\"" + go.name + "\"";
+            serialization += "go:" + go.name;
 
             if (go.transform.parent != null)
-                serialization += ":parent:\"" + go.transform.parent.name + "\"";
+                serialization += ":parent:" + go.transform.parent.name;
 
             var components = go.GetComponents<Component>();
             Component comp;
@@ -137,10 +156,10 @@ namespace rr.level {
             var serialization = "";
 
             var prefab = PrefabUtility.GetPrefabParent(go) as GameObject;
-            var id = prefab.GetInstanceID();
+            var path = AssetDatabase.GetAssetPath(prefab);
             serialization += "go:" + go.name;
             serialization += ":pf:";
-            serialization += id;
+            serialization += path;
 
             if(go.transform.parent != null)
                 serialization += ":parent:" + go.transform.parent.name;
@@ -289,7 +308,7 @@ namespace rr.level {
                 if (!IsUselessProperty(property.propertyPath) && !IsDefaultValue(property)) {
                     if (propCount > 0)
                         serialization += ",";
-                    serialization += property.propertyPath + ":" + GetPropertyStringValue(property);
+                    serialization += property.propertyPath + "=" + GetPropertyStringValue(property);
                     propCount++;
                 }
 
@@ -302,11 +321,128 @@ namespace rr.level {
             return serialization;
         }
 
-        protected T GetValueFromString<T>(string value)
+        protected void SetComponentValue(Component comp, string key, string value)
         {
-            T result = default(T);
+            if (key.StartsWith("m_")) {
+                key = key.Substring(2);
+                key = Char.ToLower(key[0]) + key.Substring(1);
+            }
 
-            return result;
+            var prop = comp.GetType().GetProperty(key);
+            var type = prop.PropertyType;
+
+            object result = null;
+            GameObjectRef goRef;
+            GameObject go;
+
+            if(type == typeof(GameObject)) {
+                go = GameObject.Find(value);
+                if (go != null)
+                    result = go;
+                else {
+                    goRef = new GameObjectRef();
+                    goRef.target = comp;
+                    goRef.targetKey = key;
+                    goRef.refName = value;
+                    gameObjRefs.Add(goRef);
+                    result = null;
+                }
+            }
+            else if (type == typeof(float)) {
+                result = float.Parse(value);
+            }
+            else if (type == typeof(int)) {
+                result = int.Parse(value);
+            }
+            else if (type == typeof(string)) {
+                result = value;
+            }
+            else if (type == typeof(float)) {
+                result = float.Parse(value);
+            }
+            else {
+                result = ParseSpecificType(type, value);
+            }
+
+            if (result != null) {
+                var args = new object[] { result };
+                comp.GetType().InvokeMember(key, System.Reflection.BindingFlags.SetProperty, null, comp, args);
+            }
+        }
+
+        protected object ParseSpecificType(Type type, string value) {
+            var length = value.Length;
+            char currentChar;
+            string word = "";
+            if (type == typeof(Vector2)) {
+                Vector2 vector = Vector2.zero;
+                for (int i = 0; i < length; i++) {
+                    currentChar = value[i];
+                    if (currentChar == ',') {
+                        vector.x = float.Parse(word);
+                        word = "";
+                    }
+                    else {
+                        word += currentChar;
+                    }
+                }
+
+                vector.y = float.Parse(word);
+
+                return vector;
+            }
+            else if (type == typeof(Vector3)) {
+                Vector3 vector = Vector3.zero;
+                bool firstValue = true;
+                for (int i = 0; i < length; i++) {
+                    currentChar = value[i];
+                    if (currentChar == ',') {
+                        if (firstValue) {
+                            vector.x = float.Parse(word);
+                            firstValue = false;
+                        }
+                        else {
+                            vector.y = float.Parse(word);
+                        }
+                        word = "";
+                    }
+                    else {
+                        word += currentChar;
+                    }
+                }
+
+                vector.z = float.Parse(word);
+                return vector;
+            }
+            else if (type == typeof(Quaternion)) {
+                Quaternion quaternion = Quaternion.identity;
+                int valueCount = 0;
+                for (int i = 0; i < length; i++) {
+                    currentChar = value[i];
+                    if (currentChar == ',') {
+                        if (valueCount == 0) {
+                            quaternion.x = float.Parse(word);
+                            valueCount++;
+                        }
+                        else if (valueCount == 1) {
+                            quaternion.y = float.Parse(word);
+                            valueCount++;
+                        }
+                        else {
+                            quaternion.z = float.Parse(word);
+                        }
+                        word = "";
+                    }
+                    else {
+                        word += currentChar;
+                    }
+                }
+                quaternion.w = float.Parse(word);
+
+                return quaternion;
+            }
+            else
+                return null;
         }
 
         protected GameObject ParseGameObject(string serialized) {
@@ -320,17 +456,26 @@ namespace rr.level {
             var mods = new List<PropertyModification>();
             bool readingValue = false;
             string key = "";
-
+            var tempGo = new GameObject();
             PropertyModification mod;
             Component comp = null;
 
             GameObjectParsingState state = GameObjectParsingState.Begin;
             string name = "", parent ="";
-            int prefabID = 0;
+            string prefabPath = "";
+            bool inParenthesis = false;
+
+            Debug.Log("--- BEGIN PARSING --");
 
             while(index < charCount)
             {
                 currentChar = serialized.ElementAt(index);
+                if (inParenthesis && currentChar != ')') {
+                    word += currentChar;
+                    index++;
+                    continue;
+                }
+
                 switch (currentChar)
                 {
                     case ':':
@@ -338,53 +483,90 @@ namespace rr.level {
                             case GameObjectParsingState.Begin:
                                 word = "";
                                 state = GameObjectParsingState.ReadingName;
+                                Debug.Log("read name");
                                 break;
                             case GameObjectParsingState.ReadingName:
                                 name = word;
+                                Debug.Log("name = " + name);
+                                state = GameObjectParsingState.NonRelevant;
                                 word = "";
                                 break;
                             case GameObjectParsingState.ReadingPrefab:
-                                prefabID = int.Parse(word);
+                                prefabPath = word;
+                                Debug.Log("prefab = " + prefabPath);
+                                state = GameObjectParsingState.NonRelevant;
                                 word = "";
                                 break;
                             case GameObjectParsingState.ReadingParent:
                                 parent = word;
+                                Debug.Log("parent = " + parent);
+                                state = GameObjectParsingState.NonRelevant;
                                 word = "";
                                 break;
                             case GameObjectParsingState.InComponentList:
                                 word = "";
+                                Debug.Log("read component name");
                                 state = GameObjectParsingState.ReadingComponentName;
                                 break;
+                            case GameObjectParsingState.ReadingComponentName:
+                                Debug.Log("component is " + word);
+                                if (word != "Transform") {
+                                    comp = APIUpdaterRuntimeServices.AddComponent(tempGo, "LevelManager.cs (503, 37)", word);
+                                }
+                                else
+                                    comp = tempGo.GetComponent<Transform>();
 
+                                componentList.Add(comp);
+                                word = "";
+                                break;
                             default:
-                                if(word == "pf")
+                                if(word == "pf") {
+                                    Debug.Log("read prefab");
                                     state = GameObjectParsingState.ReadingPrefab;
-                                else if(word == "parent")
+                                }
+                                else if(word == "parent") {
+                                    Debug.Log("read parent");
                                     state = GameObjectParsingState.ReadingParent;
+                                }
+
+                                word = "";
                             break;
                         }
                         break;
                     case '[':
-                        if(word == "comps") 
+                        if(word == "comps") {
+                            Debug.Log("Enter component list");
                             state = GameObjectParsingState.InComponentList;
-                        else if (word == "props")
+                        }
+                        else if (word == "props") {
+                            Debug.Log("Enter properties list");
                             state = GameObjectParsingState.InPropertyList;
-                        else if (word == "mods")
+                        }
+                        else if (word == "mods") {
+                            Debug.Log("Enter modifcations list");
                             state = GameObjectParsingState.InModificationList;
+                        }
+                        word = "";
                         break;
                     case ']':
-                        if (state == GameObjectParsingState.ReadingComponent || state == GameObjectParsingState.ReadingModification)
+                        if (state == GameObjectParsingState.ReadingComponent || state == GameObjectParsingState.ReadingModification) {
+                            Debug.Log("Exiting comp / mod list");
                             state = GameObjectParsingState.End;
-                        else if (state == GameObjectParsingState.ReadingProperty)
+                        }
+                        else if (state == GameObjectParsingState.ReadingProperty) {
+                            Debug.Log("Exiting properties list");
                             state = GameObjectParsingState.ReadingComponent;
-
+                        }
                         readingValue = false;
                         break;
                     case ',':
-                        if (state == GameObjectParsingState.ReadingComponent)
+                        if (state == GameObjectParsingState.ReadingComponent) {
+                            Debug.Log("Component is read");
                             state = GameObjectParsingState.InComponentList;
+                        }
                         else if (state == GameObjectParsingState.ReadingModification)
                         {
+                            Debug.Log("Modification is read");
                             state = GameObjectParsingState.InModificationList;
                             if(readingValue)
                             {
@@ -399,21 +581,39 @@ namespace rr.level {
                         }
                         else if (state == GameObjectParsingState.ReadingProperty)
                         {
+                            Debug.Log("Property is read");
                             state = GameObjectParsingState.InPropertyList;
                             if (readingValue)
                             {
-                                
-                                var args = new object[] { word };
-                                var member = comp.GetType().GetMember(key);
-                                var value = GetValueFromString<>(word);
-                                comp.GetType().InvokeMember(key, System.Reflection.BindingFlags.SetField, null, comp, args);
+                                SetComponentValue(comp, key, word);
+                                key = "";
+                                word = "";
                             }
                         }
 
                         readingValue = false;
                         break;
                     case '=':
+                        key = word;
+                        if(state == GameObjectParsingState.InPropertyList) {
+                            Debug.Log("Start reading property");
+                            state = GameObjectParsingState.ReadingProperty;
+                        }
+                        else if (state == GameObjectParsingState.InModificationList) {
+                            Debug.Log("Start reading modification");
+                            state = GameObjectParsingState.ReadingModification;
+                        }
+                            
+                        word = "";
                         readingValue = true;
+                        break;
+                    case '(':
+                        Debug.Log("ENTER parenthesis");
+                        inParenthesis = true;
+                        break;
+                    case ')':
+                        Debug.Log("EXIT parenthesis");
+                        inParenthesis = false;
                         break;
                     default:
                         word += currentChar;
@@ -423,27 +623,42 @@ namespace rr.level {
                 index++;
             }
             
-            if(prefabID != 0)
+            if(prefabPath != "")
             {
-                var prefab = EditorUtility.InstanceIDToObject(prefabID) as GameObject;
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 go = GameObject.Instantiate(prefab);
 
+                if (parent != "")
+                    go.transform.parent = GameObject.Find(parent).transform;
+
                 go.name = name;
+                PrefabUtility.ConnectGameObjectToPrefab(go, prefab);
                 PrefabUtility.SetPropertyModifications(go, mods.ToArray());
             }
             else
             {
                 go = new GameObject();
+                go.name = name;
+
                 if (parent != "")
                     go.transform.parent = GameObject.Find(parent).transform;
 
-                foreach(var comp in componentList)
+                Component clone;
+                foreach(var c in componentList)
                 {
-                    var clone = go.AddComponent(comp.GetType());
-                    EditorUtility.CopySerialized(comp, clone);
+
+                    if (c.GetType() == typeof(Transform))
+                        clone = go.transform;
+                    else
+                        clone = go.AddComponent(c.GetType());
+
+                    EditorUtility.CopySerialized(c, clone);
                 }
             }
 
+            GameObject.DestroyImmediate(tempGo);
+
+            Debug.Log("--- END PARSING --");
             return go;
         }
     }
