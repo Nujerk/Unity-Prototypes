@@ -1,20 +1,26 @@
 ﻿using UnityEngine;
 using System.Collections;
 
-public class CollisionDectection : MonoBehaviour {
+public abstract class CollisionDectection : MonoBehaviour {
 
+    // !!! Exposed for test purpose !!!
     public Vector2 direction = Vector2.right;
-    public float collisionRange = 1f;
 
     protected BoxCollider2D _box2D;
+    protected PhysicObject _pobj;
     protected float _horizontalCheckDistance;
     protected float _verticalCheckDistance;
 
-    void Start () {
+    void Start() {
         _box2D = GetComponent<BoxCollider2D>();
-        if(_box2D == null)
-        {
-            Debug.LogError("(CollisionDectection) No Box Collider 2D on this GameObject !!!");
+        if (_box2D == null) {
+            Debug.LogError("(CollisionDectection) Box Collider 2D missing on this GameObject !!!");
+            DestroyImmediate(this);
+        }
+
+        _pobj = GetComponent<PhysicObject>();
+        if(_pobj == null) {
+            Debug.LogError("(CollisionDectection) PhysicObject missing on this GameObject !!!");
             DestroyImmediate(this);
         }
 
@@ -23,30 +29,56 @@ public class CollisionDectection : MonoBehaviour {
         _verticalCheckDistance = _box2D.size.y / 2;
 
     }
-	
-	void FixedUpdate () {
-        // Check front collision
+
+    void FixedUpdate() {
+        // predict next position
+        var deltaTime = Time.fixedDeltaTime;
+        var cumulatedForces = _pobj.GetCumulatedForces();
+        var nextAppliedForce = deltaTime * cumulatedForces;
+        float nextAccX = deltaTime * cumulatedForces.x;
+        float nextAccY = deltaTime * cumulatedForces.y;
+        float nextVeloX = _pobj.Velocity.x + nextAccX;
+        float nextVeloY = _pobj.Velocity.y + nextAccY;
+        float nextDeltaX = nextVeloX * deltaTime;
+        float nextDeltaY = nextVeloY * deltaTime;
+        var currentPosition = (Vector2)gameObject.transform.position;
         var boxWidth = _box2D.size;
-        var hitArray = Physics2D.BoxCastAll(((Vector2)gameObject.transform.position) + _box2D.offset, boxWidth, 0, direction, _horizontalCheckDistance);
+        var boxOffset = _box2D.offset;
+
+        // Check front collision
+        var hitArray = Physics2D.BoxCastAll(currentPosition + boxOffset, boxWidth, 0, direction, Mathf.Abs(nextDeltaX));
         Collider2D collider;
-        foreach (var hit in hitArray)
-        {
+        foreach (var hit in hitArray) {
             collider = hit.collider;
-            if (collider != null && collider.gameObject != gameObject)
-            {
-                Debug.Log(gameObject.name);
+            if (collider != null && collider.gameObject != gameObject) {
+                OnFrontCollision(hit);
             }
         }
 
         // Check bottom collision
-        hitArray = Physics2D.BoxCastAll(((Vector2)gameObject.transform.position) + _box2D.offset - _box2D.size / 2, _box2D.size, 0, Vector2.down, _verticalCheckDistance);
-        foreach (var hit in hitArray)
-        {
-            collider = hit.collider;
-            if (collider != null && collider.gameObject != gameObject)
-            {
-                Debug.Log(gameObject.name);
+        if(nextDeltaY < 0) {
+            hitArray = Physics2D.BoxCastAll(currentPosition + boxOffset, boxWidth, 0, Vector2.down, Mathf.Abs(nextDeltaY));
+            foreach (var hit in hitArray) {
+                collider = hit.collider;
+                if (collider != null && collider.gameObject != gameObject) {
+                    OnBottomCollision(hit);
+                }
+            }
+        }
+
+        // Check top collision
+        if(nextDeltaY > 0) {
+            hitArray = Physics2D.BoxCastAll(currentPosition + boxOffset, boxWidth, 0, Vector2.up, Mathf.Abs(nextDeltaY));
+            foreach (var hit in hitArray) {
+                collider = hit.collider;
+                if (collider != null && collider.gameObject != gameObject) {
+                    OnTopCollision(hit);
+                }
             }
         }
     }
+
+    public abstract void OnFrontCollision(RaycastHit2D collision);
+    public abstract void OnTopCollision(RaycastHit2D collision);
+    public abstract void OnBottomCollision(RaycastHit2D collision);
 }
